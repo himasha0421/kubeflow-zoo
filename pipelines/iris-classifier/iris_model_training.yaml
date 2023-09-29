@@ -1,0 +1,120 @@
+# PIPELINE DEFINITION
+# Name: model-training
+# Inputs:
+#    dataset: system.Dataset
+#    preprocessor_artifacts: system.Artifact
+# Outputs:
+#    model_path: system.Model
+components:
+  comp-model-training:
+    executorLabel: exec-model-training
+    inputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        preprocessor_artifacts:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        model_path:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-model-training:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - model_training
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.3.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.3.1'\
+          \ 'joblib==1.3.2' 'pandas==1.1.4' 'numpy==1.26.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef model_training(\n    dataset: Input[Dataset] ,\n    preprocessor_artifacts:\
+          \ Input[Artifact] ,\n    model_path: Output[Model]\n):\n  import pandas\
+          \ as pd\n  import numpy as np\n  from sklearn.linear_model import LogisticRegression\n\
+          \  from sklearn.model_selection import RandomizedSearchCV, train_test_split\n\
+          \  from sklearn.pipeline import Pipeline\n  import joblib\n  from sklearn.metrics\
+          \ import classification_report\n\n  # read the dataset\n  df_data =  pd.read_csv(\
+          \ dataset.path )\n\n  # devide the dataset into features & label\n  features\
+          \ , target = df_data.drop(columns=['species_type']) , df_data['species_type']\n\
+          \n  # split the dataset into train/val\n  X_train, X_test, y_train, y_test\
+          \ = train_test_split( features, target, \n                             \
+          \                         test_size=0.2, random_state=0,\n             \
+          \                                         stratify = target)\n\n  # define\
+          \ the sklearn model training pipeline\n  clf = Pipeline(\n      steps=[\n\
+          \            (\"classifier\", LogisticRegression())\n            ]\n  )\n\
+          \n  clf.fit(X_train, y_train)\n  print(\"model score: %.3f\" % clf.score(X_test,\
+          \ y_test))\n\n  # model testing \n\n  y_true = y_test \n  # model prediction\n\
+          \  y_pred = clf.predict(X_test)\n\n  # load the preprocessor artifacts\n\
+          \  preprocessor = joblib.load( preprocessor_artifacts.path )\n  target_names\
+          \ = preprocessor.named_transformers_['cat'].steps[0][1].categories_[0].tolist()\n\
+          \n  # generate output report\n  print(classification_report(y_true, y_pred,\
+          \ target_names=target_names))\n\n  # dump the trained model\n  joblib.dump(clf,\
+          \ model_path.path)\n\n"
+        image: python:3.9
+pipelineInfo:
+  name: model-training
+root:
+  dag:
+    outputs:
+      artifacts:
+        model_path:
+          artifactSelectors:
+          - outputArtifactKey: model_path
+            producerSubtask: model-training
+    tasks:
+      model-training:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-model-training
+        inputs:
+          artifacts:
+            dataset:
+              componentInputArtifact: dataset
+            preprocessor_artifacts:
+              componentInputArtifact: preprocessor_artifacts
+        taskInfo:
+          name: model-training
+  inputDefinitions:
+    artifacts:
+      dataset:
+        artifactType:
+          schemaTitle: system.Dataset
+          schemaVersion: 0.0.1
+      preprocessor_artifacts:
+        artifactType:
+          schemaTitle: system.Artifact
+          schemaVersion: 0.0.1
+  outputDefinitions:
+    artifacts:
+      model_path:
+        artifactType:
+          schemaTitle: system.Model
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.3.0

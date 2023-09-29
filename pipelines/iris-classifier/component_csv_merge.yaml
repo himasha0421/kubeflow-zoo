@@ -1,0 +1,94 @@
+# PIPELINE DEFINITION
+# Name: merge-csv
+# Inputs:
+#    file_path: system.Artifact
+# Outputs:
+#    output_csv: system.Dataset
+components:
+  comp-merge-csv:
+    executorLabel: exec-merge-csv
+    inputDefinitions:
+      artifacts:
+        file_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-merge-csv:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - merge_csv
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.3.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.1.4'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef merge_csv(\n              file_path: Input[Artifact] ,\n    \
+          \          output_csv: Output[Dataset]\n              ):\n  import glob\n\
+          \  import pandas as pd\n  import tarfile\n\n  tarfile.open(name=file_path.path\
+          \ ,\n               mode=\"r|gz\").extractall('data')\n  df = pd.concat(\n\
+          \      [pd.read_csv(csv_file, header=None)\n       for csv_file in glob.glob('data/*.csv')])\n\
+          \  df.to_csv(output_csv.path ,\n            index=False, header=False)\n\
+          \n"
+        image: python:3.7
+pipelineInfo:
+  name: merge-csv
+root:
+  dag:
+    outputs:
+      artifacts:
+        output_csv:
+          artifactSelectors:
+          - outputArtifactKey: output_csv
+            producerSubtask: merge-csv
+    tasks:
+      merge-csv:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-merge-csv
+        inputs:
+          artifacts:
+            file_path:
+              componentInputArtifact: file_path
+        taskInfo:
+          name: merge-csv
+  inputDefinitions:
+    artifacts:
+      file_path:
+        artifactType:
+          schemaTitle: system.Artifact
+          schemaVersion: 0.0.1
+  outputDefinitions:
+    artifacts:
+      output_csv:
+        artifactType:
+          schemaTitle: system.Dataset
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.3.0

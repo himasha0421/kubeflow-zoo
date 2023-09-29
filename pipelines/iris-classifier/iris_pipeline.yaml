@@ -1,0 +1,310 @@
+# PIPELINE DEFINITION
+# Name: iris-logistic-regression
+# Inputs:
+#    url: str
+components:
+  comp-data-preprocessing:
+    executorLabel: exec-data-preprocessing
+    inputDefinitions:
+      artifacts:
+        input_file:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        preprocessor_artifact:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-download-data-kfp-sdk-v2:
+    executorLabel: exec-download-data-kfp-sdk-v2
+    inputDefinitions:
+      parameters:
+        curl_options:
+          defaultValue: --location
+          isOptional: true
+          parameterType: STRING
+        url:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        data:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+  comp-merge-csv:
+    executorLabel: exec-merge-csv
+    inputDefinitions:
+      artifacts:
+        file_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        output_csv:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-model-training:
+    executorLabel: exec-model-training
+    inputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        preprocessor_artifacts:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        model_path:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-data-preprocessing:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - data_preprocessing
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.3.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.3.1'\
+          \ 'joblib==1.3.2' 'pandas==1.1.4' 'numpy==1.26.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef data_preprocessing(\n    input_file: Input[Artifact] ,\n    output_csv:\
+          \ Output[Dataset] ,\n    preprocessor_artifact: Output[Artifact]\n):\n \
+          \ \"\"\"\n  data preprocessing :\n    1. numeric column scaling\n    2.\
+          \ categorical column encoding\n    3. split dataset into train/dev sets\n\
+          \n    define a sklearn preprocessing pipeline for above\n  \"\"\"\n\n  import\
+          \ pandas as pd\n  import numpy as np\n  from sklearn.compose import ColumnTransformer\n\
+          \  from sklearn.feature_selection import SelectPercentile, chi2\n  from\
+          \ sklearn.impute import SimpleImputer\n  from sklearn.linear_model import\
+          \ LogisticRegression\n  from sklearn.model_selection import RandomizedSearchCV,\
+          \ train_test_split\n  from sklearn.pipeline import Pipeline\n  from sklearn.preprocessing\
+          \ import OneHotEncoder, StandardScaler , LabelEncoder , OrdinalEncoder\n\
+          \  import joblib\n\n  # load dataset\n  df_iris = pd.read_csv( input_file.path\
+          \ ,\n                         names= [ 'petal_length', 'petal_width', 'sepal_length',\
+          \ \n                                 'sepal_width' , 'species_type' ] ,\n\
+          \                         header= None)\n  # fix random seed\n  np.random.seed(0)\n\
+          \n  # define numeric column and preprocessing methods\n  numeric_features\
+          \ = ['petal_length', 'petal_width', 'sepal_length', 'sepal_width' ]\n  numeric_transformer\
+          \ = Pipeline(\n      steps=[ # we can define multiple steps \n         \
+          \   (\"scaler\", StandardScaler())\n            ]\n  )\n\n  # define categorical\
+          \ columns and preprocessing\n  categorical_features = [ 'species_type' ]\n\
+          \  categorical_transformer = Pipeline(\n      steps=[\n          (\"encoder\"\
+          , OrdinalEncoder())\n      ]\n  )\n\n  # define column transformer object\n\
+          \  preprocessor = ColumnTransformer(\n      transformers=[\n          (\"\
+          num\", numeric_transformer, numeric_features),\n          (\"cat\", categorical_transformer,\
+          \ categorical_features),\n      ]\n  )\n\n  # transform the dataset\n  transformed_data\
+          \ =  preprocessor.fit_transform( df_iris )\n\n  # convert dataset to a csv\
+          \ file\n  df_transformed = pd.DataFrame(\n                          data\
+          \ = transformed_data ,\n                          columns= [ 'petal_length',\
+          \ 'petal_width', 'sepal_length', \n                                    \
+          \  'sepal_width' , 'species_type' ] \n\n                      )\n\n  # save\
+          \ dataset\n  df_transformed.to_csv(output_csv.path ,\n                 \
+          \       index=False)\n\n  # save the custom preprocessor\n  joblib.dump(preprocessor,\
+          \ preprocessor_artifact.path )\n\n  # Done !\n\n"
+        image: python:3.9
+    exec-download-data-kfp-sdk-v2:
+      container:
+        command:
+        - sh
+        - -exc
+        - 'url="$0"
+
+          output_path="$1"
+
+          curl_options="$2"
+
+          mkdir -p "$(dirname "$output_path")"
+
+          curl --get "$url" --output "$output_path" $curl_options
+
+          '
+        - '{{$.inputs.parameters[''url'']}}'
+        - '{{$.outputs.artifacts[''data''].path}}'
+        - '{{$.inputs.parameters[''curl_options'']}}'
+        image: byrnedo/alpine-curl@sha256:548379d0a4a0c08b9e55d9d87a592b7d35d9ab3037f4936f5ccd09d0b625a342
+    exec-merge-csv:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - merge_csv
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.3.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.1.4'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef merge_csv(\n              file_path: Input[Artifact] ,\n    \
+          \          output_csv: Output[Dataset]\n              ):\n  import glob\n\
+          \  import pandas as pd\n  import tarfile\n\n  tarfile.open(name=file_path.path\
+          \ ,\n               mode=\"r|gz\").extractall('data')\n  df = pd.concat(\n\
+          \      [pd.read_csv(csv_file, header=None)\n       for csv_file in glob.glob('data/*.csv')])\n\
+          \  df.to_csv(output_csv.path ,\n            index=False, header=False)\n\
+          \n"
+        image: python:3.7
+    exec-model-training:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - model_training
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.3.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.3.1'\
+          \ 'joblib==1.3.2' 'pandas==1.1.4' 'numpy==1.26.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef model_training(\n    dataset: Input[Dataset] ,\n    preprocessor_artifacts:\
+          \ Input[Artifact] ,\n    model_path: Output[Model]\n):\n  import pandas\
+          \ as pd\n  import numpy as np\n  from sklearn.linear_model import LogisticRegression\n\
+          \  from sklearn.model_selection import RandomizedSearchCV, train_test_split\n\
+          \  from sklearn.pipeline import Pipeline\n  import joblib\n  from sklearn.metrics\
+          \ import classification_report\n\n  # read the dataset\n  df_data =  pd.read_csv(\
+          \ dataset.path )\n\n  # devide the dataset into features & label\n  features\
+          \ , target = df_data.drop(columns=['species_type']) , df_data['species_type']\n\
+          \n  # split the dataset into train/val\n  X_train, X_test, y_train, y_test\
+          \ = train_test_split( features, target, \n                             \
+          \                         test_size=0.2, random_state=0,\n             \
+          \                                         stratify = target)\n\n  # define\
+          \ the sklearn model training pipeline\n  clf = Pipeline(\n      steps=[\n\
+          \            (\"classifier\", LogisticRegression())\n            ]\n  )\n\
+          \n  clf.fit(X_train, y_train)\n  print(\"model score: %.3f\" % clf.score(X_test,\
+          \ y_test))\n\n  # model testing \n\n  y_true = y_test \n  # model prediction\n\
+          \  y_pred = clf.predict(X_test)\n\n  # load the preprocessor artifacts\n\
+          \  preprocessor = joblib.load( preprocessor_artifacts.path )\n  target_names\
+          \ = preprocessor.named_transformers_['cat'].steps[0][1].categories_[0].tolist()\n\
+          \n  # generate output report\n  print(classification_report(y_true, y_pred,\
+          \ target_names=target_names))\n\n  # dump the trained model\n  joblib.dump(clf,\
+          \ model_path.path)\n\n"
+        image: python:3.9
+pipelineInfo:
+  name: iris-logistic-regression
+root:
+  dag:
+    tasks:
+      data-preprocessing:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-data-preprocessing
+        dependentTasks:
+        - merge-csv
+        inputs:
+          artifacts:
+            input_file:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: merge-csv
+        taskInfo:
+          name: data-preprocessing
+      download-data-kfp-sdk-v2:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-download-data-kfp-sdk-v2
+        inputs:
+          parameters:
+            url:
+              componentInputParameter: url
+        taskInfo:
+          name: download-data-kfp-sdk-v2
+      merge-csv:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-merge-csv
+        dependentTasks:
+        - download-data-kfp-sdk-v2
+        inputs:
+          artifacts:
+            file_path:
+              taskOutputArtifact:
+                outputArtifactKey: data
+                producerTask: download-data-kfp-sdk-v2
+        taskInfo:
+          name: merge-csv
+      model-training:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-model-training
+        dependentTasks:
+        - data-preprocessing
+        inputs:
+          artifacts:
+            dataset:
+              taskOutputArtifact:
+                outputArtifactKey: output_csv
+                producerTask: data-preprocessing
+            preprocessor_artifacts:
+              taskOutputArtifact:
+                outputArtifactKey: preprocessor_artifact
+                producerTask: data-preprocessing
+        taskInfo:
+          name: model-training
+  inputDefinitions:
+    parameters:
+      url:
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.3.0
